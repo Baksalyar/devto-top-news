@@ -256,11 +256,12 @@ def main() -> int:
         write_feed(args.output, items)
 
         state = load_state(args.state_file)
-        previous_ids = set(state.get("latest_ids", []))
+        seen_ids = set(state.get("seen_ids", []))
         current_ids = [item["id"] for item in items]
-        new_ids = [article_id for article_id in current_ids if article_id not in previous_ids]
+        new_ids = [article_id for article_id in current_ids if article_id not in seen_ids]
 
-        state["latest_ids"] = current_ids
+        seen_ids.update(current_ids)
+        state["seen_ids"] = sorted(seen_ids)
         state["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         save_state(args.state_file, state)
 
