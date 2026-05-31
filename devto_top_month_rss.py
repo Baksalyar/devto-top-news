@@ -134,14 +134,20 @@ def collect_items(session: requests.Session, limit: int, top_days: int) -> list[
         detail = fetch_json(session, detail_url)
 
         paragraphs = extract_paragraphs(detail.get("body_html", ""), article.get("description"))
-        content_html = paragraphs_to_html(paragraphs)
 
         published = detail.get("published_at") or detail.get("created_at")
+        reactions = detail.get("positive_reactions_count", article.get("positive_reactions_count", 0))
         if published:
             published_dt = dt.datetime.fromisoformat(published.replace("Z", "+00:00"))
             pub_date = format_datetime(published_dt)
+            date_str = published_dt.strftime("%-d %B %Y at %H:%M UTC")
         else:
             pub_date = format_datetime(dt.datetime.now(dt.timezone.utc))
+            date_str = "unknown date"
+
+        likes_word = "like" if reactions == 1 else "likes"
+        info_line = f"Originally published on {date_str} \u2014 {reactions} {likes_word}"
+        content_html = f"<p><em>{html.escape(info_line)}</em></p>" + paragraphs_to_html(paragraphs)
 
         items.append(
             {
