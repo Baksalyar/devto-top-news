@@ -96,7 +96,6 @@ def build_rss(items: list[dict]) -> str:
             f"      <guid isPermaLink=\"true\">{html.escape(item['link'])}</guid>"
         )
         channel_parts.append(f"      <pubDate>{item['pub_date']}</pubDate>")
-        channel_parts.append(f"      <description><![CDATA[{item['content']}]]></description>")
         channel_parts.append(
             f"      <content:encoded><![CDATA[{item['content']}]]></content:encoded>"
         )
