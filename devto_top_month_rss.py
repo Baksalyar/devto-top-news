@@ -134,7 +134,7 @@ def collect_items(session: requests.Session, limit: int, top_days: int) -> list[
             if len(items) >= limit:
                 break
             reactions = article.get("positive_reactions_count", 0)
-            if reactions < 150:
+            if reactions < 100:
                 continue
 
             article_id = article["id"]
@@ -193,8 +193,8 @@ def main() -> int:
     parser.add_argument(
         "--limit",
         type=int,
-        default=10,
-        help="Number of top posts to include (default: 10).",
+        default=20,
+        help="Number of top posts to include (default: 20).",
     )
     parser.add_argument(
         "--top-days",
