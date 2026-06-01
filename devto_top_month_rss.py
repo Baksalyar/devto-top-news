@@ -12,7 +12,7 @@ from email.utils import format_datetime
 import requests
 from bs4 import BeautifulSoup
 
-TOP_URL_TEMPLATE = "https://dev.to/api/articles?top={top_days}&per_page={limit}"
+TOP_URL_TEMPLATE = "https://dev.to/api/articles?top={top_days}&per_page={limit}&page={page}"
 ARTICLE_URL_TEMPLATE = "https://dev.to/api/articles/{article_id}"
 FEED_TITLE = "DEV.to Top Posts This Month"
 FEED_LINK = "https://dev.to/top/month"
@@ -122,42 +122,52 @@ def save_state(path: str, state: dict) -> None:
 
 
 def collect_items(session: requests.Session, limit: int, top_days: int) -> list[dict]:
-    top_url = TOP_URL_TEMPLATE.format(top_days=top_days, limit=limit)
-    top_articles = fetch_json(session, top_url)
-    if not top_articles:
-        raise RuntimeError("No articles returned from the DEV.to API.")
-
     items: list[dict] = []
-    for article in top_articles[:limit]:
-        article_id = article["id"]
-        detail_url = ARTICLE_URL_TEMPLATE.format(article_id=article_id)
-        detail = fetch_json(session, detail_url)
+    page = 1
+    while len(items) < limit:
+        fetch_limit = min(limit * 3, 100)
+        top_url = TOP_URL_TEMPLATE.format(top_days=top_days, limit=fetch_limit, page=page)
+        top_articles = fetch_json(session, top_url)
+        if not top_articles:
+            break
 
-        paragraphs = extract_paragraphs(detail.get("body_html", ""), article.get("description"))
+        for article in top_articles:
+            if len(items) >= limit:
+                break
+            reactions = article.get("positive_reactions_count", 0)
+            if reactions < 150:
+                continue
 
-        published = detail.get("published_at") or detail.get("created_at")
-        reactions = detail.get("positive_reactions_count", article.get("positive_reactions_count", 0))
-        if published:
-            published_dt = dt.datetime.fromisoformat(published.replace("Z", "+00:00"))
-            pub_date = format_datetime(published_dt)
-            date_str = published_dt.strftime("%-d %B %Y at %H:%M UTC")
-        else:
-            pub_date = format_datetime(dt.datetime.now(dt.timezone.utc))
-            date_str = "unknown date"
+            article_id = article["id"]
+            detail_url = ARTICLE_URL_TEMPLATE.format(article_id=article_id)
+            detail = fetch_json(session, detail_url)
 
-        likes_word = "like" if reactions == 1 else "likes"
-        info_line = f"Originally published on {date_str} \u2014 {reactions} {likes_word}"
-        content_html = f"<p><em>{html.escape(info_line)}</em></p>" + paragraphs_to_html(paragraphs)
+            paragraphs = extract_paragraphs(detail.get("body_html", ""), article.get("description"))
 
-        items.append(
-            {
-                "id": article_id,
-                "title": detail.get("title", article.get("title", "Untitled")),
-                "link": detail.get("url", article.get("url")),
-                "pub_date": pub_date,
-                "content": content_html,
-            }
-        )
+            published = detail.get("published_at") or detail.get("created_at")
+            reactions = detail.get("positive_reactions_count", article.get("positive_reactions_count", 0))
+            if published:
+                published_dt = dt.datetime.fromisoformat(published.replace("Z", "+00:00"))
+                pub_date = format_datetime(published_dt)
+                date_str = published_dt.strftime("%-d %B %Y at %H:%M UTC")
+            else:
+                pub_date = format_datetime(dt.datetime.now(dt.timezone.utc))
+                date_str = "unknown date"
+
+            likes_word = "like" if reactions == 1 else "likes"
+            info_line = f"Originally published on {date_str} \u2014 {reactions} {likes_word}"
+            content_html = f"<p><em>{html.escape(info_line)}</em></p>" + paragraphs_to_html(paragraphs)
+
+            items.append(
+                {
+                    "id": article_id,
+                    "title": detail.get("title", article.get("title", "Untitled")),
+                    "link": detail.get("url", article.get("url")),
+                    "pub_date": pub_date,
+                    "content": content_html,
+                }
+            )
+        page += 1
 
     return items
 
@@ -184,8 +194,8 @@ def main() -> int:
     parser.add_argument(
         "--limit",
         type=int,
-        default=20,
-        help="Number of top posts to include (default: 20).",
+        default=10,
+        help="Number of top posts to include (default: 10).",
     )
     parser.add_argument(
         "--top-days",
