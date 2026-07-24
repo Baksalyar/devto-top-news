@@ -17,6 +17,11 @@ ARTICLE_URL_TEMPLATE = "https://dev.to/api/articles/{article_id}"
 FEED_TITLE = "DEV.to Top Posts This Month"
 FEED_LINK = "https://dev.to/top/month"
 FEED_DESCRIPTION = "Top DEV.to posts from the last 30 days."
+RATE_LIMIT_EXIT_CODE = 75
+
+
+class RateLimitError(RuntimeError):
+    """The upstream API asked the collector to back off."""
 
 
 def fetch_json(session: requests.Session, url: str, retries: int = 3):
@@ -37,7 +42,10 @@ def fetch_json(session: requests.Session, url: str, retries: int = 3):
         time.sleep(delay + jitter)
 
     if last_response is not None:
-        last_response.raise_for_status()
+        raise RateLimitError(
+            f"DEV.to rate limit after {retries + 1} attempts "
+            f"for {last_response.url}"
+        )
     raise RuntimeError("Request failed without a response.")
 
 
@@ -122,51 +130,49 @@ def save_state(path: str, state: dict) -> None:
 
 def collect_items(session: requests.Session, limit: int, top_days: int) -> list[dict]:
     items: list[dict] = []
-    page = 1
-    while len(items) < limit:
-        fetch_limit = min(limit * 3, 100)
-        top_url = TOP_URL_TEMPLATE.format(top_days=top_days, limit=fetch_limit, page=page)
-        top_articles = fetch_json(session, top_url)
-        if not top_articles:
+    # The endpoint is already sorted by DEV.to's ranking. Walking pages until
+    # enough articles pass the likes threshold turns a normal refresh into
+    # hundreds of API calls and reliably triggers the anonymous rate limit.
+    fetch_limit = min(max(limit * 3, limit), 100)
+    top_url = TOP_URL_TEMPLATE.format(top_days=top_days, limit=fetch_limit, page=1)
+    top_articles = fetch_json(session, top_url)
+
+    for article in top_articles:
+        if len(items) >= limit:
             break
+        reactions = article.get("positive_reactions_count", 0)
+        if reactions < 100:
+            continue
 
-        for article in top_articles:
-            if len(items) >= limit:
-                break
-            reactions = article.get("positive_reactions_count", 0)
-            if reactions < 100:
-                continue
+        article_id = article["id"]
+        detail_url = ARTICLE_URL_TEMPLATE.format(article_id=article_id)
+        detail = fetch_json(session, detail_url)
 
-            article_id = article["id"]
-            detail_url = ARTICLE_URL_TEMPLATE.format(article_id=article_id)
-            detail = fetch_json(session, detail_url)
+        paragraphs = extract_paragraphs(detail.get("body_html", ""), article.get("description"))
 
-            paragraphs = extract_paragraphs(detail.get("body_html", ""), article.get("description"))
+        published = detail.get("published_at") or detail.get("created_at")
+        reactions = detail.get("positive_reactions_count", article.get("positive_reactions_count", 0))
+        if published:
+            published_dt = dt.datetime.fromisoformat(published.replace("Z", "+00:00"))
+            pub_date = format_datetime(published_dt)
+            date_str = published_dt.strftime("%-d %B %Y at %H:%M UTC")
+        else:
+            pub_date = format_datetime(dt.datetime.now(dt.timezone.utc))
+            date_str = "unknown date"
 
-            published = detail.get("published_at") or detail.get("created_at")
-            reactions = detail.get("positive_reactions_count", article.get("positive_reactions_count", 0))
-            if published:
-                published_dt = dt.datetime.fromisoformat(published.replace("Z", "+00:00"))
-                pub_date = format_datetime(published_dt)
-                date_str = published_dt.strftime("%-d %B %Y at %H:%M UTC")
-            else:
-                pub_date = format_datetime(dt.datetime.now(dt.timezone.utc))
-                date_str = "unknown date"
+        likes_word = "like" if reactions == 1 else "likes"
+        info_line = f"Originally published on {date_str} \u2014 {reactions} {likes_word}"
+        content_html = f"<p><em>{html.escape(info_line)}</em></p>" + paragraphs_to_html(paragraphs)
 
-            likes_word = "like" if reactions == 1 else "likes"
-            info_line = f"Originally published on {date_str} \u2014 {reactions} {likes_word}"
-            content_html = f"<p><em>{html.escape(info_line)}</em></p>" + paragraphs_to_html(paragraphs)
-
-            items.append(
-                {
-                    "id": article_id,
-                    "title": detail.get("title", article.get("title", "Untitled")),
-                    "link": detail.get("url", article.get("url")),
-                    "pub_date": pub_date,
-                    "content": content_html,
-                }
-            )
-        page += 1
+        items.append(
+            {
+                "id": article_id,
+                "title": detail.get("title", article.get("title", "Untitled")),
+                "link": detail.get("url", article.get("url")),
+                "pub_date": pub_date,
+                "content": content_html,
+            }
+        )
 
     return items
 
@@ -304,6 +310,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except RateLimitError as exc:
+        print(f"Rate limited by DEV.to: {exc}. Keeping the previous feed.", file=sys.stderr)
+        raise SystemExit(RATE_LIMIT_EXIT_CODE)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise

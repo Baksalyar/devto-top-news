@@ -56,6 +56,12 @@ Options:
 python devto_top_month_rss.py --limit 20 --top-days 30 --output devto_top_month.xml
 ```
 
+## GitHub Actions behavior
+
+The scheduled workflow runs every 6 hours. DEV.to HTTP 429 responses are treated as a temporary upstream rate limit: the existing feed is kept, the run is reported to BeanDashboard when configured, and the GitHub run does not fail. Unexpected scraper or publishing errors still fail the workflow.
+
+Optional BeanDashboard reporting uses the repository secrets `BEAN_EVENT_INGEST_URL` and `BEAN_EVENT_TOKEN`. The dashboard token must be registered for the `devto-top-news` app in `BEAN_EVENT_APP_TOKENS_JSON`.
+
 ## Public distribution (GitHub Pages)
 
 Once GitHub Pages is enabled for this repository, your feed URL will be:

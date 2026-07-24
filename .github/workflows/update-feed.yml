@@ -2,8 +2,12 @@ name: Update RSS feed
 
 on:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: devto-top-news-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -11,6 +15,9 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
+    env:
+      BEAN_EVENT_INGEST_URL: ${{ secrets.BEAN_EVENT_INGEST_URL }}
+      BEAN_EVENT_TOKEN: ${{ secrets.BEAN_EVENT_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,9 +41,27 @@ jobs:
           PY
 
       - name: Refresh feed
-        run: python devto_top_month_rss.py --limit 20 --top-days 30 --output devto_top_month.xml
+        id: refresh
+        run: |
+          set +e
+          python devto_top_month_rss.py --limit 20 --top-days 30 --output devto_top_month.xml
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "refresh_status=success" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 75 ]; then
+            echo "refresh_status=rate_limited" >> "$GITHUB_OUTPUT"
+          else
+            echo "refresh_status=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Report and final status steps decide whether this is a hard failure.
+          exit 0
 
       - name: Commit changes
+        id: commit
+        if: ${{ steps.refresh.outputs.refresh_status == 'success' }}
         run: |
           git add devto_top_month.xml devto_top_month_state.json
           if git diff --staged --quiet; then
@@ -47,3 +72,15 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "Update dev.to top month feed"
           git push
+
+      - name: Report status to BeanDashboard
+        if: ${{ always() }}
+        env:
+          BEAN_REPORT_REFRESH_STATUS: ${{ steps.refresh.outputs.refresh_status || 'workflow_failed' }}
+          BEAN_REPORT_COMMIT_STATUS: ${{ steps.commit.conclusion || 'not_run' }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python report_bean_event.py || true
+
+      - name: Fail unexpected run
+        if: ${{ always() && ((steps.refresh.outputs.refresh_status != 'success' && steps.refresh.outputs.refresh_status != 'rate_limited') || steps.commit.conclusion == 'failure') }}
+        run: exit 1
